@@ -23,11 +23,6 @@
           </div>
 
           <div class="mb-2">
-            <label class="mb-1 block text-sm">Field Name</label>
-            <InputText v-model="componentProps.name" class="w-full" />
-          </div>
-
-          <div class="mb-2">
             <label class="mb-1 block text-sm">Placeholder</label>
             <InputText v-model="componentProps.placeholder" class="w-full" />
           </div>
@@ -46,7 +41,6 @@
 
             <div v-for="(option, idx) in componentProps.options" :key="idx" class="mb-2 flex gap-2">
               <InputText v-model="option.label" placeholder="Label" class="w-full" />
-              <InputText v-model="option.value" placeholder="Value" class="w-full" />
               <Button icon="pi pi-trash" severity="danger" text @click="removeOption(idx)" />
             </div>
           </div>
@@ -188,7 +182,6 @@ const availableComponents = ref([
 const selectedComponent = ref(null)
 const componentProps = reactive({
   label: '',
-  name: '',
   placeholder: '',
   required: false,
   options: []
@@ -199,6 +192,49 @@ const editingIndex = ref(-1)
 // Form preview state
 const formData = reactive({})
 const formSubmitted = ref(false)
+
+// Generate a field name from a label
+const generateFieldName = (label) => {
+  if (!label) return `field_${Date.now()}`
+
+  // Convert the label to a valid field name (lowercase, no spaces, only alphanumeric and underscore)
+  return (
+    label
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '_') // Replace non-alphanumeric chars with underscore
+      .replace(/_+/g, '_') // Replace multiple underscores with a single one
+      .replace(/^_|_$/g, '') || // Remove leading and trailing underscores
+    `field_${Date.now()}`
+  ) // Fallback if the result is empty
+}
+
+// Ensure field name is unique
+const ensureUniqueFieldName = (baseName) => {
+  let fieldName = baseName
+  let counter = 1
+
+  // Check if the field name already exists
+  while (formFields.value.some((field) => field.name === fieldName)) {
+    fieldName = `${baseName}_${counter}`
+    counter++
+  }
+
+  return fieldName
+}
+
+// Ensure option value is unique within the select options
+const ensureUniqueOptionValue = (options, baseValue) => {
+  let value = baseValue
+  let counter = 1
+
+  // Check if the value already exists in options
+  while (options.some((opt) => opt.value === value)) {
+    value = `${baseValue}_${counter}`
+    counter++
+  }
+
+  return value
+}
 
 // Computed property to check if any form data exists
 const hasFormData = computed(() => {
@@ -215,7 +251,6 @@ const getSelectLabel = (field, value) => {
 // Reset component properties
 const resetComponentProps = () => {
   componentProps.label = ''
-  componentProps.name = ''
   componentProps.placeholder = ''
   componentProps.required = false
   componentProps.options = []
@@ -224,7 +259,7 @@ const resetComponentProps = () => {
 
 // Add new option for Select component
 const addOption = () => {
-  componentProps.options.push({ label: '', value: '' })
+  componentProps.options.push({ label: '' })
 }
 
 // Remove option from Select component
@@ -236,24 +271,50 @@ const removeOption = (index) => {
 const addComponent = () => {
   if (!selectedComponent.value) return
 
+  // Generate field name from label
+  const baseName = generateFieldName(componentProps.label)
+  const fieldName = ensureUniqueFieldName(baseName)
+
   // Create field configuration
   const fieldConfig = {
     type: selectedComponent.value.name.toLowerCase(),
     component: selectedComponent.value.component,
     label: componentProps.label || 'Untitled Field',
-    name: componentProps.name || `field_${Date.now()}`,
+    name: fieldName,
     placeholder: componentProps.placeholder || '',
     required: componentProps.required
   }
 
   // Add options for Select component
   if (selectedComponent.value.name === 'Select') {
-    fieldConfig.options = JSON.parse(JSON.stringify(componentProps.options))
+    // Generate values from labels automatically
+    const options = componentProps.options.map((option) => {
+      const baseValue = generateFieldName(option.label)
+      // Ensure value is unique among options
+      const value = ensureUniqueOptionValue(
+        componentProps.options.map((o) => ({ value: generateFieldName(o.label) })),
+        baseValue
+      )
+
+      return {
+        label: option.label || 'Untitled Option',
+        value: value
+      }
+    })
+
+    fieldConfig.options = options
   }
 
   // Update existing field or add new one
   if (editingIndex.value >= 0) {
+    const oldName = formFields.value[editingIndex.value].name
     formFields.value[editingIndex.value] = fieldConfig
+
+    // Transfer form data to new field name if it changed
+    if (oldName !== fieldConfig.name && formData[oldName] !== undefined) {
+      formData[fieldConfig.name] = formData[oldName]
+      delete formData[oldName]
+    }
   } else {
     formFields.value.push(fieldConfig)
   }
@@ -270,12 +331,12 @@ const editField = (index) => {
   selectedComponent.value = availableComponents.value.find((c) => c.name.toLowerCase() === field.type)
 
   componentProps.label = field.label
-  componentProps.name = field.name
   componentProps.placeholder = field.placeholder
   componentProps.required = field.required
 
   if (field.options) {
-    componentProps.options = JSON.parse(JSON.stringify(field.options))
+    // When editing, we only need the label as values will be auto-generated
+    componentProps.options = field.options.map((opt) => ({ label: opt.label }))
   } else {
     componentProps.options = []
   }
